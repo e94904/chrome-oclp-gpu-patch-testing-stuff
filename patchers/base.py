@@ -5,6 +5,7 @@ Handles common workflows: backup, pattern scanning & patching, launcher compilat
 codesigning with LocalCodeSigner, and signature validation.
 """
 import os
+import re
 import sys
 import shutil
 import subprocess
@@ -290,6 +291,65 @@ class BaseBrowserPatcher:
     def get_patches(self, version):
         """Return list of (name, orig_bytes, patched_bytes) or regex scanner callable."""
         raise NotImplementedError
+
+    def patch_validate_target(self, data: bytearray, label="Patch 6 (ScopedEGLSurfaceIOSurface::ValidateTarget)"):
+        """Patch ScopedEGLSurfaceIOSurface::ValidateTarget to unconditionally return true."""
+        p6_153_pat = bytes.fromhex("b0 01 c3 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90")
+        p6_pre_pat = bytes.fromhex("b0 01 c3 90 41 56 41 55 41 54 53 48 83 ec 10 49 89 fd 48 8b 07")
+        if data.find(p6_153_pat) != -1 or data.find(p6_pre_pat) != -1:
+            print(f"[*] {label} is already applied.")
+            return True
+
+        p6_applied_153_re = re.compile(
+            rb"\xb0\x01\xc3\x90(?:\x41[\x50-\x57]|[\x50-\x57]){0,6}\x48\x81\xec\x30\x01\x00\x00",
+            re.DOTALL,
+        )
+        p6_applied_dyn_re = re.compile(
+            rb"\xb0\x01\xc3\x90(?:\x41[\x50-\x57]|[\x50-\x57]){0,6}"
+            rb"(?:\x48\x81\xec.{4}|\x48\x83\xec.)?"
+            rb"\x81\xfe\xe1\x0d\x00\x00.{1,24}\x81\x7f.\x5f\x30\x00\x00",
+            re.DOTALL,
+        )
+        if p6_applied_153_re.search(data) or p6_applied_dyn_re.search(data):
+            print(f"[*] {label} is already applied.")
+            return True
+
+        # 1. Chromium 153-157 exact pattern (push r14; push rbx; sub rsp, 0x130; cmp esi, 0xde1)
+        p6_153_orig = bytes.fromhex("55 48 89 e5 41 56 53 48 81 ec 30 01 00 00 81 fe e1 0d 00 00")
+        idx = data.find(p6_153_orig)
+        if idx != -1:
+            data[idx : idx + len(p6_153_pat)] = p6_153_pat
+            print(f"[+] {label} applied successfully at {hex(idx)}!")
+            return True
+
+        # 2. Dynamic pattern anchored to GL_TEXTURE_2D (0xde1) and EGL_TEXTURE_2D (0x305f),
+        #    independent of callee-saved register count and stack frame size (e.g. M158+ sub rsp, 0x138).
+        #    Overwrite only the 4-byte prologue (push rbp; mov rbp, rsp -> mov al, 1; ret; nop).
+        p6_re = re.compile(
+            rb"\x55\x48\x89\xe5"
+            rb"(?:\x41[\x50-\x57]|[\x50-\x57]){0,6}"
+            rb"(?:\x48\x81\xec.{4}|\x48\x83\xec.)?"
+            rb"\x81\xfe\xe1\x0d\x00\x00"
+            rb".{1,24}\x81\x7f.\x5f\x30\x00\x00",
+            re.DOTALL,
+        )
+        m = p6_re.search(data)
+        if m:
+            offset = m.start()
+            data[offset : offset + 4] = b"\xb0\x01\xc3\x90"
+            print(f"[+] {label} applied dynamically at {hex(offset)}!")
+            return True
+
+        # 3. Pre-153 static pattern
+        p6_pre_orig = bytes.fromhex("55 48 89 e5 41 56 41 55 41 54 53 48 83 ec 10 49 89 fd 48 8b 07")
+        idx = data.find(p6_pre_orig)
+        if idx != -1:
+            data[idx : idx + len(p6_pre_pat)] = p6_pre_pat
+            print(f"[+] {label} applied successfully at {hex(idx)}!")
+            return True
+
+        print(f"[!] Warning: {label} pattern not found!")
+        return False
 
     def ensure_certificate(self):
         """Ensures the code-signing certificate exists in the user keychain, creating it if needed."""

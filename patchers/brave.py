@@ -218,46 +218,6 @@ class BravePatcher(BaseBrowserPatcher):
             print("[!] Warning: Patch 5 (IOSurface Factory Target 0x84f5) pattern not found!")
             return False
 
-        def patch_p6_validate_target(data: bytearray):
-            # Check already applied first (full 20-byte NOP pattern, pre-153 pattern, or anchored frame)
-            p6_153_pat = bytes.fromhex("b0 01 c3 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90")
-            p6_pre_pat = bytes.fromhex("b0 01 c3 90 41 56 41 55 41 54 53 48 83 ec 10 49 89 fd 48 8b 07")
-            if data.find(p6_153_pat) != -1 or data.find(p6_pre_pat) != -1:
-                print("[*] Patch 6 (ScopedEGLSurfaceIOSurface::ValidateTarget) is already applied.")
-                return True
-            p6_applied_re = re.compile(rb"\xb0\x01\xc3\x90(?:\x41[\x50-\x57]|[\x50-\x57]){0,4}\x48\x81\xec\x30\x01\x00\x00", re.DOTALL)
-            if p6_applied_re.search(data):
-                print("[*] Patch 6 (ScopedEGLSurfaceIOSurface::ValidateTarget) is already applied.")
-                return True
-
-            # 1. Chromium 153+ exact pattern (sub rsp, 0x130; cmp esi, 0xde1)
-            p6_153_orig = bytes.fromhex("55 48 89 e5 41 56 53 48 81 ec 30 01 00 00 81 fe e1 0d 00 00")
-            idx = data.find(p6_153_orig)
-            if idx != -1:
-                data[idx : idx + len(p6_153_pat)] = p6_153_pat
-                print(f"[+] Patch 6 (ScopedEGLSurfaceIOSurface::ValidateTarget) applied successfully at {hex(idx)}!")
-                return True
-
-            # 2. Dynamic pattern specifically anchored to ScopedEGLSurfaceIOSurface::ValidateTarget (stack frame 0x130)
-            p6_re = re.compile(rb"\x55\x48\x89\xe5(?:\x41[\x50-\x57]|[\x50-\x57]){1,4}\x48\x81\xec\x30\x01\x00\x00\x81\xfe\xe1\x0d\x00\x00", re.DOTALL)
-            m = p6_re.search(data)
-            if m:
-                offset = m.start()
-                data[offset : offset + 20] = p6_153_pat
-                print(f"[+] Patch 6 (ScopedEGLSurfaceIOSurface::ValidateTarget) applied dynamically at {hex(offset)}!")
-                return True
-
-            # 3. Pre-153 static pattern
-            p6_pre_orig = bytes.fromhex("55 48 89 e5 41 56 41 55 41 54 53 48 83 ec 10 49 89 fd 48 8b 07")
-            idx = data.find(p6_pre_orig)
-            if idx != -1:
-                data[idx : idx + len(p6_pre_pat)] = p6_pre_pat
-                print(f"[+] Patch 6 (ScopedEGLSurfaceIOSurface::ValidateTarget) applied successfully at {hex(idx)}!")
-                return True
-
-            print("[!] Warning: Patch 6 (ScopedEGLSurfaceIOSurface::ValidateTarget) pattern not found!")
-            return False
-
         def patch_p7_backing_target(data: bytearray):
             p7_orig_re = re.compile(rb"\x8b\x45(.)\x89\x83(..\x00\x00)\x8b\x45(.)\x88\x83(..\x00\x00)\x45\x31\xf6\x44\x89\xb3(..\x00\x00)\x66\xc7\x83(..\x00\x00)\x00\x00", re.DOTALL)
             m = p7_orig_re.search(data)
@@ -302,7 +262,7 @@ class BravePatcher(BaseBrowserPatcher):
             ("Patch 3 (GpuMode fallback to HARDWARE_GL)", patch_p3_gpumode),
             ("Patch 4 (Seatbelt IsSandboxed)", patch_p4_seatbelt),
             ("Patch 5 (IOSurfaceImageBackingFactory target 0x84f5)", patch_p5_factory_target),
-            ("Patch 6 (ScopedEGLSurfaceIOSurface::ValidateTarget)", patch_p6_validate_target),
+            ("Patch 6 (ScopedEGLSurfaceIOSurface::ValidateTarget)", self.patch_validate_target),
             ("Patch 7 (IOSurfaceImageBacking gl_target_ = 0x84f5)", patch_p7_backing_target),
             ("Patch 8 (CreateDesktopCaptureDeviceMac fallback to CPU capturer)", patch_p8_desktop_capture)
         ]
